@@ -2,8 +2,9 @@ package cmd
 
 import (
 	"fmt"
-	"log"
 	"os"
+
+	"config-syncer/pkg/config"
 
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/informers"
@@ -11,6 +12,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/klog/v2"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -21,11 +23,9 @@ var (
 	debug   bool
 	err     error
 
-	client *kubernetes.Clientset
-	config *rest.Config
+	client     *kubernetes.Clientset
+	kubeConfig *rest.Config
 
-	srcSecret  string
-	destSecret string
 	incluster  bool
 	kubeconfig string
 )
@@ -38,21 +38,21 @@ var rootCmd = &cobra.Command{
 
 		// get kubeconfig, either fron kubeconfig arg or incluster kubeconfig
 		if incluster {
-			config, err = rest.InClusterConfig()
+			kubeConfig, err = rest.InClusterConfig()
 			if err != nil {
-				panic(err.Error())
+				klog.Fatal(err.Error())
 			}
 		} else {
-			config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+			kubeConfig, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
 			if err != nil {
-				panic(err.Error())
+				klog.Fatal(err.Error())
 			}
 		}
 
 		// cteate new kubernetes client
-		client, err = kubernetes.NewForConfig(config)
+		client, err = kubernetes.NewForConfig(kubeConfig)
 		if err != nil {
-			panic(err)
+			klog.Fatal(err.Error())
 		}
 
 		// stop signal for the informer
@@ -104,14 +104,10 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&debug, "debug", false, "enable debug log message")
 
 	// local flags
-	rootCmd.Flags().StringVar(&srcSecret, "src-secret", "", "source secret")
-	rootCmd.Flags().StringVar(&destSecret, "dest-secret", "", "destination secret")
 	rootCmd.Flags().BoolVar(&incluster, "incluster", false, "run inside or ousite kubernetes cluster")
 	rootCmd.Flags().StringVar(&kubeconfig, "kubeconfig", "", "kubeconfig location")
 
 	// validate required flags
-	rootCmd.MarkFlagRequired("src-secret")
-	rootCmd.MarkFlagRequired("dest-secret")
 }
 
 // initConfig reads in config file and ENV variables if set.
@@ -135,11 +131,16 @@ func initConfig() {
 	// override configuration through viper
 	viper.Set("debug", debug)
 	if debug {
-		log.Println("running in DEBUG mode")
+		klog.Info("running in DEBUG mode")
 	}
 
 	// if a config file is found, read it in.
 	if err := viper.ReadInConfig(); err == nil {
-		fmt.Fprintln(os.Stderr, "using config file:", viper.ConfigFileUsed())
+		klog.Info("using config file: ", viper.ConfigFileUsed())
+
+		appConf := &config.Config{}
+		if err := viper.Unmarshal(appConf); err != nil {
+			klog.Fatal(err.Error())
+		}
 	}
 }

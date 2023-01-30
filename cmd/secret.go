@@ -1,9 +1,8 @@
 package cmd
 
 import (
+	"config-syncer/pkg/config"
 	"context"
-	"fmt"
-	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -22,48 +21,58 @@ func secretOnUpdate(obj interface{}, new interface{}) {
 
 func secretOnDelete(obj interface{}) {
 	secret := obj.(*corev1.Secret)
-	fmt.Println("Secret", secret.Name, "has been deleted")
+	klog.Infof("secret %s/%s has been deleted", secret.Namespace, secret.Name)
 }
 
 func createOrUpdate(obj interface{}) {
 	secret := obj.(*corev1.Secret)
-	srcSecretNamespace := strings.Split(srcSecret, "/")[0]
-	srcSecretName := strings.Split(srcSecret, "/")[1]
-	destSecretNamespace := strings.Split(destSecret, "/")[0]
-	destSecretName := strings.Split(destSecret, "/")[1]
+	appConfig := config.GetConfig()
 
-	isExists := true
-	if secret.Namespace == srcSecretNamespace && secret.Name == srcSecretName {
-		s, getErr := client.CoreV1().Secrets(destSecretNamespace).Get(context.TODO(), destSecretName, metav1.GetOptions{})
-		if errors.IsNotFound(getErr) {
-			// if not exists, create
-			isExists = false
-			klog.Info("cannot found Secret: ", destSecretName)
-			_, err := client.CoreV1().Secrets(destSecretNamespace).Create(context.TODO(), &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      destSecretName,
-					Namespace: destSecretNamespace,
-				},
-				Data: secret.Data,
-			}, metav1.CreateOptions{})
-			if err != nil {
-				panic(fmt.Errorf("failed to create Secret: %v", getErr))
+	secretFound := false
+	for _, sec := range appConfig.Secrets {
+		if secret.Namespace == sec.Namespace && secret.Name == sec.Name {
+			secretFound = true
+			klog.Infof("processing secret %s/%s ", secret.Namespace, secret.Name)
+			for _, dest := range sec.Destinations {
+				isExists := true
+				request, getErr := client.CoreV1().Secrets(dest.Namespace).Get(context.TODO(), dest.Name, metav1.GetOptions{})
+				if errors.IsNotFound(getErr) {
+					// if not exists, create
+					isExists = false
+					klog.Infof("cannot find secret %s/%s ", dest.Namespace, dest.Name)
+					_, err := client.CoreV1().Secrets(dest.Namespace).Create(context.TODO(), &corev1.Secret{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      dest.Name,
+							Namespace: dest.Namespace,
+						},
+						Data: secret.Data,
+					}, metav1.CreateOptions{})
+					if err != nil {
+						klog.Errorf("failed to create secret: %v", err)
+					}
+					klog.Info("successfully create Secret: ", dest.Name)
+				} else if getErr != nil {
+					klog.Errorf("failed to get secret: %v", getErr)
+				}
+				// if exists, update
+				if isExists {
+					retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+						request.Data = secret.Data
+						_, err := client.CoreV1().Secrets(dest.Namespace).Update(context.TODO(), request, metav1.UpdateOptions{})
+						return err
+					})
+					if retryErr != nil {
+						klog.Errorf("failed to update secret: %v", retryErr)
+					}
+					klog.Info("successfully update Secret: ", dest.Name)
+				}
 			}
-			klog.Info("successfully create Secret: ", destSecretName)
-		} else if getErr != nil {
-			panic(fmt.Errorf("failed to get Secret: %v", getErr))
 		}
-		// if exists, update
-		if isExists {
-			retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-				s.Data = secret.Data
-				_, err := client.CoreV1().Secrets(destSecretNamespace).Update(context.TODO(), s, metav1.UpdateOptions{})
-				return err
-			})
-			if retryErr != nil {
-				panic(fmt.Errorf("failed to update Secret: %v", retryErr))
-			}
-			klog.Info("successfully update Secret: ", destSecretName)
+	}
+
+	if !secretFound {
+		if debug {
+			klog.Infof("skip processing secret %s/%s", secret.Namespace, secret.Name)
 		}
 	}
 }
