@@ -60,7 +60,7 @@ var rootCmd = &cobra.Command{
 		defer close(stopper)
 
 		// setup shared informers
-		factory := informers.NewSharedInformerFactory(client, 0)
+		factory := informers.NewSharedInformerFactoryWithOptions(client, 0, getSIFOptions()...)
 		secretInformer := factory.Core().V1().Secrets().Informer()
 
 		// handle runtime crash
@@ -143,4 +143,12 @@ func initConfig() {
 			klog.Fatal(err.Error())
 		}
 	}
+}
+
+func getSIFOptions() (sifOpts []informers.SharedInformerOption) {
+	cfg := config.GetConfig()
+	for _, secret := range cfg.Secrets {
+		sifOpts = append(sifOpts, informers.WithNamespace(secret.Namespace))
+	}
+	return
 }
