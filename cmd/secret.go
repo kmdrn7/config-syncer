@@ -64,7 +64,7 @@ func createOrUpdate(obj interface{}) {
 					if retryErr != nil {
 						klog.Errorf("failed to update secret: %v", retryErr)
 					}
-					klog.Info("successfully update Secret: ", dest.Name)
+					klog.Infof("successfully update secret: %s/%s", dest.Namespace, dest.Name)
 				}
 			}
 		}
